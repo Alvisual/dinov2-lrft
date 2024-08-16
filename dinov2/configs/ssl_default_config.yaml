@@ -1,6 +1,6 @@
 # this file was changed
 MODEL:
-  WEIGHTS: '' 
+  WEIGHTS: ""
 compute_precision:
   grad_scaler: true
   teacher:
@@ -52,21 +52,21 @@ ibot:
   loss_weight: 1.0 # 1.0 original
   mask_sample_probability: 0.5
   mask_ratio_min_max:
-  - 0.1
-  - 0.5
+    - 0.1
+    - 0.5
   separate_head: false
   head_n_prototypes: 65536
   head_bottleneck_dim: 256
   head_nlayers: 3
   head_hidden_dim: 2048
 train:
-  batch_size_per_gpu: 256 # 256 for vit_s, 32 for vit_g
-  dataset_path: CustomImageDataset:split=TRAIN:root=/lustre/groups/labs/marr/qscd01/datasets/NCT-CRC-HE-100K:extra=/home/aih/benedikt.roth/scripts/bild_pfade.csv #to change to your own dataset
+  batch_size_per_gpu: 64 # 256 for vit_s, 32 for vit_g
+  dataset_path: CustomImageDataset:split=TRAIN:root=/home/user/datasets-trichotrack/raw:extra=/home/user/dinov2-lrft/trichotrack.csv #to change to your own dataset
   output_dir: . # change to something reasonable
-  saveckp_freq: 20
+  saveckp_freq: 50
   seed: 0
-  num_workers: 10  
-  OFFICIAL_EPOCH_LENGTH: 100 # change depending on your dataset
+  num_workers: 5
+  OFFICIAL_EPOCH_LENGTH: 400 # change depending on your dataset
   cache_dataset: true
   centering: "sinkhorn_knopp" # or "sinkhorn_knopp" or "centering"
 student:
@@ -75,7 +75,7 @@ student:
   drop_path_rate: 0.4
   layerscale: 1.0e-05
   drop_path_uniform: false # original true
-  pretrained_weights: 
+  pretrained_weights:
   ffn_layer: "mlp" #"swiglufused" or "mlp"
   block_chunks: 0
   qkv_bias: true
@@ -94,9 +94,9 @@ optim:
   epochs: 100 #200 for bs 256
   weight_decay: 0.04 # 0.04 original
   weight_decay_end: 0.2
-  base_lr: 2.0e-04  # learning rate for a batch size of 1024 is 2.0e-04
-  lr: 0.  # will be set after applying scaling rule
-  warmup_epochs: 10 
+  base_lr: 2.0e-04 # learning rate for a batch size of 1024 is 2.0e-04
+  lr: 0. # will be set after applying scaling rule
+  warmup_epochs: 10
   min_lr: 1.0e-06
   clip_grad: 3.0
   freeze_last_layer_epochs: 1 #original 1
@@ -107,16 +107,16 @@ optim:
   adamw_beta2: 0.999
 crops:
   global_crops_scale:
-  - 0.32
-  - 1.0
+    - 0.32
+    - 1.0
   local_crops_number: 8
   local_crops_scale:
-  - 0.05
-  - 0.32
+    - 0.05
+    - 0.32
   global_crops_size: 224 #original 224 -> 518 necessary for loading checkpoints, however, interpolation can be used to adapt the size
   local_crops_size: 98 #original 96 -> has to be divideable by 14
 evaluation:
-  eval_period_iterations: 1000 # original 12500, what better -> use 1000 for finetuning
+  eval_period_iterations: 5000 # original 12500, what better -> use 1000 for finetuning
 # add a link to an /eval/training_iterations here, to continue with training to load the dino head weights as well, important: also set the start iterations!
 head:
   head_path:
