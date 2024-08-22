@@ -79,8 +79,9 @@ def get_downloaded_dino_vit_s():
 
 # this function returns either a vit_s or vit_g, depending on what is commented out. the model is loaded with from torch.hub wih the weights and the positional encoding is reshaped.
 def get_downloaded_dino_interpolated():
-    model=torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
-    #model=torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14')
+    # model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
+    # model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14')
+    model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
     input_tensor = model.pos_embed
     tensor_corr_shape = interpolate_pos_encoding(input_tensor, 16, 16)
     pos_embed = nn.Parameter(torch.zeros(1, 257))
@@ -150,9 +151,10 @@ class SSLMetaArch(nn.Module):
         teacher_model_dict = dict()
 
         # This is commented out, because it was easier to create the model using the torch.hub, as this already returns the pretrained version with the correct architecture.
-        #student_backbone, teacher_backbone, embed_dim = build_model_from_cfg(cfg)
-        #embed_dim = 1536 # use for vit_g
-        embed_dim = 384 # use for vit_s
+        # student_backbone, teacher_backbone, embed_dim = build_model_from_cfg(cfg)
+        # embed_dim = 1536 # use for vit_g
+        # embed_dim = 384 # use for vit_s
+        embed_dim = 768 # use for vit_b
 
         # use for cut loading downloaded weights
         '''
@@ -251,7 +253,7 @@ class SSLMetaArch(nn.Module):
 
         self.student = nn.ModuleDict(student_model_dict)
         self.teacher = nn.ModuleDict(teacher_model_dict)
-        
+
         # load dino_head weights if available
         if cfg.head.head_path:
             path_student = os.path.join(cfg.head.head_path, 'student_dino_head_checkpoint.pth')
@@ -260,7 +262,7 @@ class SSLMetaArch(nn.Module):
             chkpt_student = torch.load(path_student)
             student_model_dict["dino_head"].load_state_dict(chkpt_student['student_dino_head'], strict=True)
             teacher_model_dict["dino_head"].load_state_dict(chkpt_teacher['teacher_dino_head'], strict=True)
-        
+
         # there is no backpropagation through the teacher, so no need for gradients
         for p in self.teacher.parameters():
             p.requires_grad = False
@@ -277,7 +279,7 @@ class SSLMetaArch(nn.Module):
         #for name, param in self.student.named_parameters():
         #    if 'dino_head' in name:
         #        print(f'Parameter: {name}, Requires Grad: {param.requires_grad}')
-    
+
         logger.info(f"Student and Teacher are built: they are both {cfg.student.arch} network.")
 
     def forward(self, inputs):
@@ -517,7 +519,7 @@ class SSLMetaArch(nn.Module):
                 self.teacher.dino_head._streams
             ) = self.student.backbone._streams = self.teacher.backbone._streams
             self.need_to_synchronize_fsdp_streams = False
-    
+
     # this was used for training the din_head without touhing the backbone
     '''
     def fsdp_synchronize_streams(self):

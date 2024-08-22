@@ -60,17 +60,17 @@ ibot:
   head_nlayers: 3
   head_hidden_dim: 2048
 train:
-  batch_size_per_gpu: 64 # 256 for vit_s, 32 for vit_g
+  batch_size_per_gpu: 56 # 256 for vit_s, 32 for vit_g
   dataset_path: CustomImageDataset:split=TRAIN:root=/home/user/datasets-trichotrack/raw:extra=/home/user/dinov2-lrft/trichotrack.csv #to change to your own dataset
   output_dir: . # change to something reasonable
-  saveckp_freq: 50
+  saveckp_freq: 100
   seed: 0
   num_workers: 5
   OFFICIAL_EPOCH_LENGTH: 400 # change depending on your dataset
   cache_dataset: true
   centering: "sinkhorn_knopp" # or "sinkhorn_knopp" or "centering"
 student:
-  arch: vit_small # e.g. vit_large or vit_small or vit_giant2
+  arch: vit_base # e.g. vit_large or vit_small or vit_giant2
   patch_size: 14 # important to use the checkpoints!
   drop_path_rate: 0.4
   layerscale: 1.0e-05
@@ -114,7 +114,7 @@ crops:
     - 0.05
     - 0.32
   global_crops_size: 224 #original 224 -> 518 necessary for loading checkpoints, however, interpolation can be used to adapt the size
-  local_crops_size: 98 #original 96 -> has to be divideable by 14
+  local_crops_size: 84 #original 96 -> has to be divideable by 14
 evaluation:
   eval_period_iterations: 5000 # original 12500, what better -> use 1000 for finetuning
 # add a link to an /eval/training_iterations here, to continue with training to load the dino head weights as well, important: also set the start iterations!
