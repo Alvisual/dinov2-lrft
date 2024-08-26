@@ -3,7 +3,7 @@
 This is the repository of  [Low-resource finetuning of foundation models beats state-of-the-art in histopathology](https://arxiv.org/abs/2401.04720) which was accepted at ISBI 2024.
 It is a slightly adapted version of the original [DINOv2](https://arxiv.org/abs/2304.07193), GitHub [repository](https://github.com/facebookresearch/dinov2/tree/main/dinov2).
 ## Finetuning can be compute efficient
-<img src="media/figure1.png" alt="Title" title="Finetuning works well" width="500" /> 
+<img src="media/figure1.png" alt="Title" title="Finetuning works well" width="500" />
 We propose finetuning a DINOv2 ViT-S, which yields at least equal performance compared to CTransPath and RetCCL but in a fraction of domain specific training time. Performance is measured on three datasets: TCGA & CPTAC (WSI-level classification) and NCT-CRC (patch-level classification).
 
 ## Loss and performance over time
@@ -103,7 +103,7 @@ We make all models as well as heads used for training publicly available in the 
   </tbody>
 </table>
 
-### Load pretrained model 
+### Load pretrained model
 
 
 ```python
