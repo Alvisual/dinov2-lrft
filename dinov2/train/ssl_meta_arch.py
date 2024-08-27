@@ -5,36 +5,40 @@
 
 # this file was changed
 
-from functools import partial
 import logging
+import math
 import os
+from functools import partial
 
 import torch
 from torch import nn
-
-from dinov2.loss import DINOLoss, iBOTPatchLoss, KoLeoLoss
-from dinov2.models import build_model_from_cfg
-from dinov2.layers import DINOHead
-from dinov2.utils.utils import has_batchnorms
-from dinov2.utils.param_groups import get_params_groups_with_decay, fuse_params_groups
-from dinov2.fsdp import get_fsdp_wrapper, ShardedGradScaler, get_fsdp_modules, reshard_fsdp_model
-
-from dinov2.models.vision_transformer import BlockChunk
-
+from torch.nn import functional as nnf
 
 try:
     from xformers.ops import fmha
 except ImportError:
     raise AssertionError("xFormers is required for training")
 
+from dinov2.fsdp import (
+    get_fsdp_modules,
+    get_fsdp_wrapper,
+    reshard_fsdp_model,
+    ShardedGradScaler,
+)
+from dinov2.layers import DINOHead
+from dinov2.loss import DINOLoss, iBOTPatchLoss, KoLeoLoss
+from dinov2.models import build_model_from_cfg
+from dinov2.models.vision_transformer import BlockChunk
+from dinov2.utils.param_groups import get_params_groups_with_decay, fuse_params_groups
+from dinov2.utils.utils import has_batchnorms
 
 logger = logging.getLogger("dinov2")
 
-import math
-import torch.nn.functional as nnf
 
-# this is an adapted version of the interpolate_pos_encoding in the vision_transformer.py to change the shape of the positional encoding
 def interpolate_pos_encoding(x, w, h):
+    """This is an adapted version of the `interpolate_pos_encoding()` in the
+        `vision_transformer.py` to change the shape of the positional encoding.
+    """
     N = x.shape[1] - 1
     dim = x.shape[-1]
     w0 = w / int(math.sqrt(N))
@@ -42,7 +46,9 @@ def interpolate_pos_encoding(x, w, h):
 
     # Interpolate the position embeddings without changing the first row (class token)
     patch_pos_embed = nnf.interpolate(
-        x[:, 1:].reshape(1, int(math.sqrt(N)), int(math.sqrt(N)), dim).permute(0, 3, 1, 2),
+        x[:, 1:]
+        .reshape(1, int(math.sqrt(N)), int(math.sqrt(N)), dim)
+        .permute(0, 3, 1, 2),
         scale_factor=(w0, h0),
         mode="bicubic",
     )
@@ -52,10 +58,12 @@ def interpolate_pos_encoding(x, w, h):
     # Concatenate the class token with the interpolated position embeddings
     return torch.cat((x[:, :1], patch_pos_embed), dim=1)
 
-# this function returns a vit_s model with smaller positional embedding (shape 224x224). T
-# The reduced size happens through cutting the middle part out
+
 def get_downloaded_dino_vit_s():
-    model=torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
+    """This function returns a vit_s model with smaller positional embedding
+        (shape 224x224). The reduced size happens through cutting the middle part out.
+    """
+    model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
     input_tensor = model.pos_embed
     class_token = input_tensor[:, 0:1, :]
     rest = input_tensor[:, 1:, :]
@@ -77,11 +85,15 @@ def get_downloaded_dino_vit_s():
 
     return model
 
-# this function returns either a vit_s or vit_g, depending on what is commented out. the model is loaded with from torch.hub wih the weights and the positional encoding is reshaped.
+
 def get_downloaded_dino_interpolated():
-    # model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
-    # model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14')
-    model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
+    """This function returns either a vit_s or vit_g, depending on what is commented out.
+        The model is loaded with from torch.hub wih the weights and the
+        positional encoding is reshaped.
+    """
+    # model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
+    # model = torch.hub.load("facebookresearch/dinov2", "dinov2_vitg14")
+    model = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14")
     input_tensor = model.pos_embed
     tensor_corr_shape = interpolate_pos_encoding(input_tensor, 16, 16)
     pos_embed = nn.Parameter(torch.zeros(1, 257))
@@ -90,10 +102,11 @@ def get_downloaded_dino_interpolated():
 
     return model
 
-# this function is exactly the same as the one above, but with registers
+
 def get_downloaded_dino_reg_interpolated():
-    model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14_reg')
-    #model=torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14_reg')
+    """This function is exactly the same as the one above, but with registers."""
+    model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14_reg")
+    # model = torch.hub.load("facebookresearch/dinov2", "dinov2_vitg14_reg")
     input_tensor = model.pos_embed
     tensor_corr_shape = interpolate_pos_encoding(input_tensor, 16, 16)
     pos_embed = nn.Parameter(torch.zeros(1, 257))
@@ -102,44 +115,49 @@ def get_downloaded_dino_reg_interpolated():
 
     return model
 
-# This function allows to continue finetuning in case of the training breaking or also just if more experiments should be conducted.
-# Both teacher and student are set here directly. It is easy to switch between vit_s and vit_g.
+
 def get_dino_finetuned_downloaded(cfg, embed_dim):
+    """This function allows to continue finetuning in case of the training breaking
+        or also just if more experiments should be conducted.
+        Both teacher and student are set here directly.
+        It is easy to switch between vit_s and vit_g.
+    """
     # pos_embed has wrong shape
-    model_student=torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
-    model_teacher=torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
-    #model_student=torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14')
-    #model_teacher=torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14')
+    model_student = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
+    model_teacher = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
+    # model_student = torch.hub.load("facebookresearch/dinov2", "dinov2_vitg14")
+    # model_teacher = torch.hub.load("facebookresearch/dinov2", "dinov2_vitg14")
     # load finetuned weights, here the path added to the config_files is used
-    path_student = os.path.join(cfg.head.head_path, 'student_checkpoint.pth')
-    path_teacher = os.path.join(cfg.head.head_path, 'teacher_checkpoint.pth')
-    pretrained_student = torch.load(path_student, map_location=torch.device('cpu'))
-    pretrained_teacher = torch.load(path_teacher, map_location=torch.device('cpu'))
+    path_student = os.path.join(cfg.head.head_path, "student_checkpoint.pth")
+    path_teacher = os.path.join(cfg.head.head_path, "teacher_checkpoint.pth")
+    pretrained_student = torch.load(path_student, map_location=torch.device("cpu"))
+    pretrained_teacher = torch.load(path_teacher, map_location=torch.device("cpu"))
     # create correct state dict for loading (the name teacher has to be removed)
     teacher_state_dict = {}
-    for key, value in pretrained_teacher['teacher'].items():
-        if 'dino_head' in key:
-            print('not used')
+    for key, value in pretrained_teacher["teacher"].items():
+        if "dino_head" in key:
+            print("not used")
         else:
-            new_key = key.replace('backbone.', '')
+            new_key = key.replace("backbone.", "")
             teacher_state_dict[new_key] = value
     # create correct state dict for loading (the name student has to be removed)
     student_state_dict = {}
-    for key, value in pretrained_student['student'].items():
-        if 'dino_head' in key:
-            print('not used')
+    for key, value in pretrained_student["student"].items():
+        if "dino_head" in key:
+            print("not used")
         else:
-            new_key = key.replace('backbone.', '')
+            new_key = key.replace("backbone.", "")
             student_state_dict[new_key] = value
-    #change shape of pos_embed
+    # change shape of pos_embed
     pos_embed1 = nn.Parameter(torch.zeros(1, 257, embed_dim))
     pos_embed2 = nn.Parameter(torch.zeros(1, 257, embed_dim))
     model_student.pos_embed = pos_embed1
     model_teacher.pos_embed = pos_embed2
-    # load state dict of with strict=true to make sure everything works corectly
+    # load state dict of with strict=true to make sure everything works correctly
     model_student.load_state_dict(student_state_dict, strict=True)
     model_teacher.load_state_dict(teacher_state_dict, strict=True)
     return model_student, model_teacher
+
 
 class SSLMetaArch(nn.Module):
     def __init__(self, cfg):
@@ -150,30 +168,31 @@ class SSLMetaArch(nn.Module):
         student_model_dict = dict()
         teacher_model_dict = dict()
 
-        # This is commented out, because it was easier to create the model using the torch.hub, as this already returns the pretrained version with the correct architecture.
+        # This is commented out, because it was easier to create the model using torch.hub
+        # as this already returns the pretrained version with the correct architecture.
         # student_backbone, teacher_backbone, embed_dim = build_model_from_cfg(cfg)
-        # embed_dim = 1536 # use for vit_g
-        # embed_dim = 384 # use for vit_s
-        embed_dim = 768 # use for vit_b
+        # embed_dim = 1536  # use for vit_g
+        # embed_dim = 384  # use for vit_s
+        embed_dim = 768  # use for vit_b
 
         # use for cut loading downloaded weights
-        '''
+        """
         student_backbone = get_downloaded_dino_vit_s()
         teacher_backbone = get_downloaded_dino_vit_s()
-        '''
+        """
 
         # use for interpolated loading downloaded weights
         student_backbone = get_downloaded_dino_interpolated()
         teacher_backbone = get_downloaded_dino_interpolated()
 
-        # use for interpolated loading downloaded weights with registern
-        '''
+        # use for interpolated loading downloaded weights with registers
+        """
         student_backbone = get_downloaded_dino_reg_interpolated()
         teacher_backbone = get_downloaded_dino_reg_interpolated()
-        '''
+        """
 
         # use for continuation with finetuned weights, in this case the dino head weights also have to be set
-        #student_backbone, teacher_backbone = get_dino_finetuned_downloaded(cfg, embed_dim)
+        # student_backbone, teacher_backbone = get_dino_finetuned_downloaded(cfg, embed_dim)
 
         student_model_dict["backbone"] = student_backbone
         teacher_model_dict["backbone"] = teacher_backbone
@@ -216,7 +235,7 @@ class SSLMetaArch(nn.Module):
         else:
             logger.info("OPTIONS -- DINO -- not using DINO")
 
-        #comment out to not use dino_head
+        # comment out to not use dino_head
         if self.do_dino or self.do_ibot:
             student_model_dict["dino_head"] = dino_head()
             teacher_model_dict["dino_head"] = dino_head()
@@ -256,12 +275,18 @@ class SSLMetaArch(nn.Module):
 
         # load dino_head weights if available
         if cfg.head.head_path:
-            path_student = os.path.join(cfg.head.head_path, 'student_dino_head_checkpoint.pth')
-            path_teacher = os.path.join(cfg.head.head_path, 'teacher_dino_head_checkpoint.pth')
-            chkpt_teacher = torch.load(path_teacher)
+            path_student = os.path.join(cfg.head.head_path, "student_dino_head_checkpoint.pth")
+            path_teacher = os.path.join(cfg.head.head_path, "teacher_dino_head_checkpoint.pth")
             chkpt_student = torch.load(path_student)
-            student_model_dict["dino_head"].load_state_dict(chkpt_student['student_dino_head'], strict=True)
-            teacher_model_dict["dino_head"].load_state_dict(chkpt_teacher['teacher_dino_head'], strict=True)
+            chkpt_teacher = torch.load(path_teacher)
+            student_model_dict["dino_head"].load_state_dict(
+                state_dict=chkpt_student["student_dino_head"],
+                strict=True,
+            )
+            teacher_model_dict["dino_head"].load_state_dict(
+                state_dict=chkpt_teacher["teacher_dino_head"],
+                strict=True,
+            )
 
         # there is no backpropagation through the teacher, so no need for gradients
         for p in self.teacher.parameters():
@@ -270,15 +295,15 @@ class SSLMetaArch(nn.Module):
         for p in self.student.parameters():
             p.requires_grad = True
         # disable backpropagation for student.backbone, this was tested to only train the dino_head without the backbone
-        '''
+        """
         for p in self.student.backbone.parameters():
             p.requires_grad = False
-        '''
+        """
 
         # for debugging, verify what is getting tracked
-        #for name, param in self.student.named_parameters():
-        #    if 'dino_head' in name:
-        #        print(f'Parameter: {name}, Requires Grad: {param.requires_grad}')
+        # for name, param in self.student.named_parameters():
+        #    if "dino_head" in name:
+        #        print(f"Parameter: {name}, Requires Grad: {param.requires_grad}")
 
         logger.info(f"Student and Teacher are built: they are both {cfg.student.arch} network.")
 
@@ -338,7 +363,7 @@ class SSLMetaArch(nn.Module):
                     out=buffer_tensor_teacher[n_cls_tokens : n_cls_tokens + n_masked_patches],
                 )
                 tokens_after_head = self.teacher.dino_head(buffer_tensor_teacher)
-                #tokens_after_head = buffer_tensor_teacher # tested training without dino_head
+                # tokens_after_head = buffer_tensor_teacher # tested training without dino_head
                 teacher_cls_tokens_after_head = tokens_after_head[:n_cls_tokens]
                 masked_teacher_patch_tokens_after_head = tokens_after_head[
                     n_cls_tokens : n_cls_tokens + n_masked_patches
@@ -352,36 +377,37 @@ class SSLMetaArch(nn.Module):
                     out=buffer_tensor_teacher[:n_masked_patches],
                 )
                 teacher_cls_tokens_after_head = self.teacher.dino_head(teacher_cls_tokens)
-                #teacher_cls_tokens_after_head = teacher_cls_tokens # tested training without dino_head
-                masked_teacher_patch_tokens_after_head = self.teacher.ibot_head(buffer_tensor_teacher)[
-                    :n_masked_patches
-                ]
+                # teacher_cls_tokens_after_head = teacher_cls_tokens # tested training without dino_head
+                masked_teacher_patch_tokens_after_head = self.teacher.ibot_head(buffer_tensor_teacher)[:n_masked_patches]
             else:
                 teacher_cls_tokens_after_head = self.teacher.dino_head(teacher_cls_tokens)
-                #teacher_cls_tokens_after_head = teacher_cls_tokens # tested training without dino_head
+                # teacher_cls_tokens_after_head = teacher_cls_tokens # tested training without dino_head
                 masked_teacher_ibot_softmaxed_centered = None
 
             if self.cfg.train.centering == "centering":
                 teacher_dino_softmaxed_centered_list = self.dino_loss.softmax_center_teacher(
-                    teacher_cls_tokens_after_head, teacher_temp=teacher_temp
+                    teacher_output=teacher_cls_tokens_after_head,
+                    teacher_temp=teacher_temp,
                 ).view(n_global_crops_teacher, -1, *teacher_cls_tokens_after_head.shape[1:])
                 self.dino_loss.update_center(teacher_cls_tokens_after_head)
                 if do_ibot:
                     masked_teacher_patch_tokens_after_head = masked_teacher_patch_tokens_after_head.unsqueeze(0)
                     masked_teacher_ibot_softmaxed_centered = self.ibot_patch_loss.softmax_center_teacher(
-                        masked_teacher_patch_tokens_after_head[:, :n_masked_patches], teacher_temp=teacher_temp
+                        teacher_patch_tokens=masked_teacher_patch_tokens_after_head[:, :n_masked_patches],
+                        teacher_temp=teacher_temp,
                     )
                     masked_teacher_ibot_softmaxed_centered = masked_teacher_ibot_softmaxed_centered.squeeze(0)
                     self.ibot_patch_loss.update_center(masked_teacher_patch_tokens_after_head[:n_masked_patches])
 
             elif self.cfg.train.centering == "sinkhorn_knopp":
                 teacher_dino_softmaxed_centered_list = self.dino_loss.sinkhorn_knopp_teacher(
-                    teacher_cls_tokens_after_head, teacher_temp=teacher_temp
+                    teacher_output=teacher_cls_tokens_after_head,
+                    teacher_temp=teacher_temp,
                 ).view(n_global_crops_teacher, -1, *teacher_cls_tokens_after_head.shape[1:])
 
                 if do_ibot:
                     masked_teacher_ibot_softmaxed_centered = self.ibot_patch_loss.sinkhorn_knopp_teacher(
-                        masked_teacher_patch_tokens_after_head,
+                        teacher_output=masked_teacher_patch_tokens_after_head,
                         teacher_temp=teacher_temp,
                         n_masked_patches_tensor=n_masked_patches_tensor,
                     )
@@ -398,7 +424,9 @@ class SSLMetaArch(nn.Module):
 
         loss_accumulator = 0  # for backprop
         student_global_backbone_output_dict, student_local_backbone_output_dict = self.student.backbone(
-            [global_crops, local_crops], masks=[masks, None], is_training=True
+            [global_crops, local_crops],
+            masks=[masks, None],
+            is_training=True,
         )
 
         inputs_for_student_head_list = []
@@ -417,19 +445,21 @@ class SSLMetaArch(nn.Module):
             ibot_student_patch_tokens = student_global_backbone_output_dict["x_norm_patchtokens"]
             buffer_tensor_patch_tokens = ibot_student_patch_tokens.new_zeros(upperbound, _dim)
             buffer_tensor_patch_tokens[:n_masked_patches].copy_(
-                torch.index_select(ibot_student_patch_tokens.flatten(0, 1), dim=0, index=mask_indices_list)
+                torch.index_select(
+                    ibot_student_patch_tokens.flatten(0, 1),
+                    dim=0,
+                    index=mask_indices_list,
+                )
             )
             if not self.ibot_separate_head:
                 inputs_for_student_head_list.append(buffer_tensor_patch_tokens.unsqueeze(0))
             else:
-                student_global_masked_patch_tokens_after_head = self.student.ibot_head(buffer_tensor_patch_tokens)[
-                    :n_masked_patches
-                ]
+                student_global_masked_patch_tokens_after_head = self.student.ibot_head(buffer_tensor_patch_tokens)[:n_masked_patches]
 
         # 2: run
         _attn_bias, cat_inputs = fmha.BlockDiagonalMask.from_tensor_list(inputs_for_student_head_list)
         outputs_list = _attn_bias.split(self.student.dino_head(cat_inputs))
-        #outputs_list = _attn_bias.split(cat_inputs) # tested training without dino_head
+        # outputs_list = _attn_bias.split(cat_inputs) # tested training without dino_head
 
         # 3a: local crops cls tokens
         student_local_cls_tokens_after_head = outputs_list.pop(0).squeeze(0)
@@ -515,19 +545,17 @@ class SSLMetaArch(nn.Module):
     def fsdp_synchronize_streams(self):
         if self.need_to_synchronize_fsdp_streams:
             torch.cuda.synchronize()
-            self.student.dino_head._streams = (
-                self.teacher.dino_head._streams
-            ) = self.student.backbone._streams = self.teacher.backbone._streams
+            self.student.dino_head._streams = self.teacher.dino_head._streams = self.student.backbone._streams = self.teacher.backbone._streams
             self.need_to_synchronize_fsdp_streams = False
 
-    # this was used for training the din_head without touhing the backbone
-    '''
+    # this was used for training the din_head without touching the backbone
+    """
     def fsdp_synchronize_streams(self):
         if self.need_to_synchronize_fsdp_streams:
             torch.cuda.synchronize()
             self.student.backbone._streams = self.teacher.backbone._streams
             self.need_to_synchronize_fsdp_streams = False
-    '''
+    """
 
     def update_teacher(self, m):
         student_param_list = []
@@ -535,15 +563,15 @@ class SSLMetaArch(nn.Module):
         with torch.no_grad():
             for k in self.student.keys():
                 # use to only update dino_head
-                '''
-                if k != 'backbone':
+                """
+                if k != "backbone":
                     for ms, mt in zip(get_fsdp_modules(self.student[k]), get_fsdp_modules(self.teacher[k])):
                         student_param_list += ms.params
                         teacher_param_list += mt.params
-                '''
+                """
                 for ms, mt in zip(get_fsdp_modules(self.student[k]), get_fsdp_modules(self.teacher[k])):
-                        student_param_list += ms.params
-                        teacher_param_list += mt.params
+                    student_param_list += ms.params
+                    teacher_param_list += mt.params
             torch._foreach_mul_(teacher_param_list, m)
             torch._foreach_add_(teacher_param_list, student_param_list, alpha=1 - m)
 
@@ -578,6 +606,12 @@ class SSLMetaArch(nn.Module):
         for k, v in self.student.items():
             self.teacher[k].load_state_dict(self.student[k].state_dict())
             student_model_cfg = self.cfg.compute_precision.student[k]
-            self.student[k] = get_fsdp_wrapper(student_model_cfg, modules_to_wrap={BlockChunk})(self.student[k])
+            self.student[k] = get_fsdp_wrapper(
+                model_cfg=student_model_cfg,
+                modules_to_wrap={BlockChunk},
+            )(self.student[k])
             teacher_model_cfg = self.cfg.compute_precision.teacher[k]
-            self.teacher[k] = get_fsdp_wrapper(teacher_model_cfg, modules_to_wrap={BlockChunk})(self.teacher[k])
+            self.teacher[k] = get_fsdp_wrapper(
+                model_cfg=teacher_model_cfg,
+                modules_to_wrap={BlockChunk},
+            )(self.teacher[k])
