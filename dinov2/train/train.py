@@ -6,33 +6,38 @@
 
 # this file was changed
 
-import sys
 import os
+import sys
 
 # Add the root directory of the project to sys.path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, project_root)
 
 import argparse
 import logging
 import math
-import os
 from functools import partial
-import wandb
-#os.environ["WANDB_MODE"]="offline" #use this so set wandb to offline mode
 
 from fvcore.common.checkpoint import PeriodicCheckpointer
 import torch
+import wandb
 
-from dinov2.data import SamplerType, make_data_loader, make_dataset
-from dinov2.data import collate_data_and_cast, DataAugmentationDINO, MaskingGenerator
-import dinov2.distributed as distributed
+# os.environ["WANDB_MODE"] = "offline"  # Use this so set wandb to offline mode
+
+from dinov2 import distributed
+from dinov2.data import (
+    collate_data_and_cast,
+    DataAugmentationDINO,
+    make_data_loader,
+    make_dataset,
+    MaskingGenerator,
+    SamplerType,
+)
 from dinov2.fsdp import FSDPCheckpointer
 from dinov2.logging import MetricLogger
+from dinov2.train.ssl_meta_arch import SSLMetaArch
 from dinov2.utils.config import setup
 from dinov2.utils.utils import CosineScheduler
-
-from dinov2.train.ssl_meta_arch import SSLMetaArch
 
 
 torch.backends.cuda.matmul.allow_tf32 = True  # PyTorch 1.12 sets this to False by default
@@ -41,13 +46,22 @@ logger = logging.getLogger("dinov2")
 
 def get_args_parser(add_help: bool = True):
     parser = argparse.ArgumentParser("DINOv2 training", add_help=add_help)
-    parser.add_argument("--config-file", default="/home/aih/benedikt.roth/dinov2/dinov2/configs/ssl_default_config.yaml", metavar="FILE", help="path to config file")
+    parser.add_argument(
+        "--config-file",
+        default="/home/aih/benedikt.roth/dinov2/dinov2/configs/ssl_default_config.yaml",
+        metavar="FILE",
+        help="path to config file",
+    )
     parser.add_argument(
         "--no-resume",
         action="store_true",
         help="Whether to not attempt to resume from the checkpoint directory. ",
     )
-    parser.add_argument("--eval-only", action="store_true", help="perform evaluation only")
+    parser.add_argument(
+        "--eval-only",
+        action="store_true",
+        help="perform evaluation only",
+    )
     parser.add_argument("--eval", type=str, default="", help="Eval type to perform")
     parser.add_argument(
         "opts",
@@ -71,7 +85,10 @@ For python-based LazyConfig, use "path.key=value".
 
 
 def build_optimizer(cfg, params_groups):
-    return torch.optim.AdamW(params_groups, betas=(cfg.optim.adamw_beta1, cfg.optim.adamw_beta2))
+    return torch.optim.AdamW(
+        params=params_groups,
+        betas=(cfg.optim.adamw_beta1, cfg.optim.adamw_beta2),
+    )
 
 
 def build_schedulers(cfg):
@@ -149,15 +166,24 @@ def do_test(cfg, model, iteration):
         torch.save({"student": new_state_dict_student}, student_ckp_path)
 
         # Save state_dict_teacher_dino_head for the teacher model
-        teacher_dino_head_ckp_path = os.path.join(eval_dir, "teacher_dino_head_checkpoint.pth")
-        torch.save({"teacher_dino_head": state_dict_teacher_dino_head}, teacher_dino_head_ckp_path)
-
+        teacher_dino_head_ckp_path = os.path.join(
+            eval_dir, "teacher_dino_head_checkpoint.pth"
+        )
+        torch.save(
+            {"teacher_dino_head": state_dict_teacher_dino_head},
+            teacher_dino_head_ckp_path,
+        )
         # Save state_dict_student_dino_head for the student model
-        student_dino_head_ckp_path = os.path.join(eval_dir, "student_dino_head_checkpoint.pth")
-        torch.save({"student_dino_head": state_dict_student_dino_head}, student_dino_head_ckp_path)
+        student_dino_head_ckp_path = os.path.join(
+            eval_dir, "student_dino_head_checkpoint.pth"
+        )
+        torch.save(
+            {"student_dino_head": state_dict_student_dino_head},
+            student_dino_head_ckp_path,
+        )
 
 
-def do_train(cfg, model, resume=False): # change resume to true?
+def do_train(cfg, model, resume=False):  # change resume to true?
     model.train()
     inputs_dtype = torch.half
     fp16_scaler = model.fp16_scaler  # for mixed precision training
@@ -174,15 +200,20 @@ def do_train(cfg, model, resume=False): # change resume to true?
     ) = build_schedulers(cfg)
 
     # checkpointer
-    checkpointer = FSDPCheckpointer(model, cfg.train.output_dir, optimizer=optimizer, save_to_disk=True)
+    checkpointer = FSDPCheckpointer(
+        model=model,
+        save_dir=cfg.train.output_dir,
+        optimizer=optimizer,
+        save_to_disk=True,
+    )
 
     start_iter = checkpointer.resume_or_load(cfg.MODEL.WEIGHTS, resume=resume).get("iteration", -1) + 1
-    #start_iter = 41000
+
     OFFICIAL_EPOCH_LENGTH = cfg.train.OFFICIAL_EPOCH_LENGTH
     max_iter = cfg.optim.epochs * OFFICIAL_EPOCH_LENGTH
 
     periodic_checkpointer = PeriodicCheckpointer(
-        checkpointer,
+        checkpointer=checkpointer,
         period=3 * OFFICIAL_EPOCH_LENGTH,
         max_iter=max_iter,
         max_to_keep=3,
@@ -199,9 +230,9 @@ def do_train(cfg, model, resume=False): # change resume to true?
     )
 
     data_transform = DataAugmentationDINO(
-        cfg.crops.global_crops_scale,
-        cfg.crops.local_crops_scale,
-        cfg.crops.local_crops_number,
+        global_crops_scale=cfg.crops.global_crops_scale,
+        local_crops_scale=cfg.crops.local_crops_scale,
+        local_crops_number=cfg.crops.local_crops_number,
         global_crops_size=cfg.crops.global_crops_size,
         local_crops_size=cfg.crops.local_crops_size,
     )
@@ -224,8 +255,8 @@ def do_train(cfg, model, resume=False): # change resume to true?
     )
     # for one GPU use this, for several switch to sampler_type = SamplerType.SHARDED_INFINITE
     sampler_type = SamplerType.INFINITE
-    #sampler_type = SamplerType.SHARDED_INFINITE
-    #sampler_type = SamplerType.EPOCH
+    # sampler_type = SamplerType.SHARDED_INFINITE
+    # sampler_type = SamplerType.EPOCH
     data_loader = make_data_loader(
         dataset=dataset,
         batch_size=cfg.train.batch_size_per_gpu,
@@ -239,9 +270,9 @@ def do_train(cfg, model, resume=False): # change resume to true?
     )
 
     run = wandb.init(
-    # Set the project where this run will be logged
-    project="dino_training")
-
+        # Set the project where this run will be logged
+        project="dino_training",
+    )
 
     # training loop
     # change this value manually, if continuing with earlier weights to keep the progress of the schedulers
@@ -306,13 +337,26 @@ def do_train(cfg, model, resume=False): # change resume to true?
         if math.isnan(sum(loss_dict_reduced.values())):
             logger.info("NaN detected")
             raise AssertionError
-        #losses_reduced = sum(loss for loss in loss_dict_reduced.values()) # removed the keleo regularizer, because it is often inf
-        losses_reduced = sum(loss for key, loss in loss_dict_reduced.items() if key != 'koleo_loss')
+        losses_reduced = sum(loss for loss in loss_dict_reduced.values())
+        # losses_reduced = sum(  # removed the keleo regularizer, because it is often inf
+        #     loss for key, loss in loss_dict_reduced.items() if key != "koleo_loss"
+        # )
 
         # wandb logging
-        wandb.log({"lr": lr, "loss": losses_reduced, "wd": wd, "mom": mom, "last_layer_lr": last_layer_lr, "current_batch_size": current_batch_size
-        , "koleo_loss": loss_dict_reduced['koleo_loss'], "dino_local_crops_loss": loss_dict_reduced['dino_local_crops_loss']
-        , "dino_global_crops_loss": loss_dict_reduced['dino_global_crops_loss'], "ibot_loss": loss_dict_reduced['ibot_loss']})
+        wandb.log(
+            {
+                "lr": lr,
+                "loss": losses_reduced,
+                "wd": wd,
+                "mom": mom,
+                "last_layer_lr": last_layer_lr,
+                "current_batch_size": current_batch_size,
+                "koleo_loss": loss_dict_reduced["koleo_loss"],
+                "dino_local_crops_loss": loss_dict_reduced["dino_local_crops_loss"],
+                "dino_global_crops_loss": loss_dict_reduced["dino_global_crops_loss"],
+                "ibot_loss": loss_dict_reduced["ibot_loss"],
+            }
+        )
         metric_logger.update(lr=lr)
         metric_logger.update(wd=wd)
         metric_logger.update(mom=mom)
@@ -322,7 +366,10 @@ def do_train(cfg, model, resume=False): # change resume to true?
 
         # checkpointing and testing
 
-        if cfg.evaluation.eval_period_iterations > 0 and (iteration + 1) % cfg.evaluation.eval_period_iterations == 0:
+        if (
+            cfg.evaluation.eval_period_iterations > 0
+            and (iteration + 1) % cfg.evaluation.eval_period_iterations == 0
+        ):
             do_test(cfg, model, f"training_{iteration}")
             torch.cuda.synchronize()
         periodic_checkpointer.step(iteration)
