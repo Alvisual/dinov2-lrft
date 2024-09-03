@@ -18,9 +18,10 @@ import logging
 import math
 from functools import partial
 
-from fvcore.common.checkpoint import PeriodicCheckpointer
 import torch
 import wandb
+from fvcore.common.checkpoint import PeriodicCheckpointer
+from omegaconf import OmegaConf, SCMode
 
 # os.environ["WANDB_MODE"] = "offline"  # Use this so set wandb to offline mode
 
@@ -269,9 +270,17 @@ def do_train(cfg, model, resume=False):  # change resume to true?
         collate_fn=collate_fn,
     )
 
+    # https://docs.wandb.ai/guides/integrations/hydra#track-hyperparameters
+    # https://omegaconf.readthedocs.io/en/2.3_branch/usage.html#using-structured-config-mode
     run = wandb.init(
         # Set the project where this run will be logged
-        project="dino_training",
+        project="dino_training_v1",
+        config=OmegaConf.to_container(
+            cfg=cfg,
+            resolve=True,
+            throw_on_missing=True,
+            structured_config_mode=SCMode.DICT,
+        ),  # type: ignore
     )
 
     # training loop

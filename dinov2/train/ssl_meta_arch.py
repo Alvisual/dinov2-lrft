@@ -91,9 +91,9 @@ def get_downloaded_dino_interpolated():
         The model is loaded with from torch.hub wih the weights and the
         positional encoding is reshaped.
     """
-    # model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
+    model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
     # model = torch.hub.load("facebookresearch/dinov2", "dinov2_vitg14")
-    model = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14")
+    # model = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14")
     input_tensor = model.pos_embed
     tensor_corr_shape = interpolate_pos_encoding(input_tensor, 16, 16)
     pos_embed = nn.Parameter(torch.zeros(1, 257))
@@ -172,8 +172,8 @@ class SSLMetaArch(nn.Module):
         # as this already returns the pretrained version with the correct architecture.
         # student_backbone, teacher_backbone, embed_dim = build_model_from_cfg(cfg)
         # embed_dim = 1536  # use for vit_g
-        # embed_dim = 384  # use for vit_s
-        embed_dim = 768  # use for vit_b
+        embed_dim = 384  # use for vit_s
+        # embed_dim = 768  # use for vit_b
 
         # use for cut loading downloaded weights
         """
