@@ -13,3 +13,4 @@ dist/
 wandb/
 logs/
 eval
+venv/
